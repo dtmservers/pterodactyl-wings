@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/daemon/logger/jsonfilelog"
 	"github.com/pterodactyl/wings/config"
@@ -177,7 +178,6 @@ func (e *Environment) Create() error {
 		AttachStderr: true,
 		OpenStdin:    true,
 		Tty:          true,
-		ExposedPorts: a.Exposed(),
 		Image:        strings.TrimPrefix(e.meta.Image, "~"),
 		Env:          e.Configuration.EnvironmentVariables(),
 		Labels: map[string]string{
@@ -189,7 +189,6 @@ func (e *Environment) Create() error {
 	tmpfsSize := strconv.Itoa(int(config.Get().Docker.TmpfsSize))
 
 	hostConf := &container.HostConfig{
-		PortBindings: a.DockerBindings(),
 
 		// Configure the mounts for this container. First mount the server data directory
 		// into the container as a r/w bind.
@@ -229,7 +228,24 @@ func (e *Environment) Create() error {
 		NetworkMode: container.NetworkMode(config.Get().Docker.Network.Mode),
 	}
 
-	if _, err := e.client.ContainerCreate(context.Background(), conf, hostConf, nil, nil, e.Id); err != nil {
+	networkingConfig := &networktypes.NetworkingConfig{
+		EndpointsConfig: make(map[string]*networktypes.EndpointSettings),
+	}
+
+	if config.Get().Docker.Network.Driver != "macvlan" {
+		conf.ExposedPorts = a.Exposed()
+		hostConf.PortBindings = a.DockerBindings()
+	}
+
+	if config.Get().Docker.Network.Driver == "macvlan" {
+		networkingConfig.EndpointsConfig[config.Get().Docker.Network.Name] = &networktypes.EndpointSettings{
+			IPAddress:  a.DefaultMapping.Ip,
+			IPAMConfig: &networktypes.EndpointIPAMConfig{},
+		}
+		networkingConfig.EndpointsConfig[config.Get().Docker.Network.Name].IPAMConfig.IPv4Address = a.DefaultMapping.Ip
+	}
+
+	if _, err := e.client.ContainerCreate(context.Background(), conf, hostConf, networkingConfig, nil, e.Id); err != nil {
 		return errors.Wrap(err, "environment/docker: failed to create container")
 	}
 

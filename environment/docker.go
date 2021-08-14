@@ -2,6 +2,7 @@ package environment
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 
@@ -69,6 +70,28 @@ func ConfigureDocker(ctx context.Context) error {
 // Creates a new network on the machine if one does not exist already.
 func createDockerNetwork(ctx context.Context, cli *client.Client) error {
 	nw := config.Get().Docker.Network
+
+	var options = make(map[string]string)
+
+	if nw.Driver == "bridge" {
+		options["encryption"] = "false"
+		options["com.docker.network.bridge.default_bridge"] = "false"
+		options["com.docker.network.bridge.enable_icc"] = strconv.FormatBool(nw.EnableICC)
+		options["com.docker.network.bridge.enable_ip_masquerade"] = "true"
+		options["com.docker.network.bridge.host_binding_ipv4"] = "0.0.0.0"
+		options["com.docker.network.bridge.name"] = "pterodactyl0"
+		options["com.docker.network.driver.mtu"] = "1500"
+	}
+
+	if nw.Driver == "overlay" {
+		options["encryption"] = "true"
+		options["com.docker.network.driver.mtu"] = "9216"
+	}
+
+	if nw.Driver == "macvlan" {
+		options["parent"] = config.Get().Docker.Network.Interface
+	}
+
 	_, err := cli.NetworkCreate(ctx, nw.Name, types.NetworkCreate{
 		Driver:     nw.Driver,
 		EnableIPv6: true,
@@ -82,20 +105,13 @@ func createDockerNetwork(ctx context.Context, cli *client.Client) error {
 				Gateway: nw.Interfaces.V6.Gateway,
 			}},
 		},
-		Options: map[string]string{
-			"encryption": "false",
-			"com.docker.network.bridge.default_bridge":       "false",
-			"com.docker.network.bridge.enable_icc":           strconv.FormatBool(nw.EnableICC),
-			"com.docker.network.bridge.enable_ip_masquerade": "true",
-			"com.docker.network.bridge.host_binding_ipv4":    "0.0.0.0",
-			"com.docker.network.bridge.name":                 "pterodactyl0",
-			"com.docker.network.driver.mtu":                  "1500",
-		},
+		Options: options,
 	})
 	if err != nil {
+		log.Error(fmt.Sprintf("Error creating network %s driver:%s", nw.Name, nw.Driver))
 		return err
 	}
-	if nw.Driver != "host" && nw.Driver != "overlay" && nw.Driver != "weavemesh" {
+	if nw.Driver != "host" && nw.Driver != "overlay" && nw.Driver != "weavemesh" && nw.Driver != "macvlan" {
 		config.Update(func(c *config.Configuration) {
 			c.Docker.Network.Interface = c.Docker.Network.Interfaces.V4.Gateway
 		})
